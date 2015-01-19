@@ -1,4 +1,4 @@
 CPROXY
 ========
 
-A pure c
+A pure c implementation of a simple http proxy.
