@@ -11,9 +11,17 @@
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <signal.h>
+#include <curl/curl.h>
 
 #include "config.h"
 #include "proxy.h"
+
+static const char *usage = "Usage: cproxy.out [start | stop]";
+
+struct MemoryStruct {
+    char *memory;
+    size_t size;
+};
 
 
 int get_listen_port()
@@ -27,37 +35,117 @@ int get_listen_port()
 }
 
 
-int fetch(char *post, char *response)
-{
-    char *reply =
-        "HTTP/1.1 200 OK\n"
-        "Date: Thu, 19 Feb 2009 12:27:04 GMT\n"
-        "Server: Apache/2.2.3\n"
-        "Last-Modified: Wed, 18 Jun 2003 16:05:58 GMT\n"
-        "ETag: \"56d-9989200-1132c580\"\n"
-        "Content-Type: text/html\n"
-        "Content-Length: 39\n"
-        "Accept-Ranges: bytes\n"
-        "Connection: close\n"
-        "\n"
-        "I guess you want to visit Google right?";
 
-    // look for ipaddr, post request and get response back
-    strcpy(response, reply);
+int extract_host(char *post, char *host)
+{
+    // Search for host in http header
+    static const char *HOST = "Host:";
+    while (*post != '\0')
+    {
+        if (!strncmp(post, HOST, strlen(HOST)))
+        {
+            break;
+        }
+        post++;
+    }
+
+    // move pointer to the address
+    post += strlen(HOST) + 1;
+
+    // copy the host char by char
+    while (*post != '\n' && *post != '\r' && *post != '\0')
+    {
+        *host = *post;
+        host++;
+        post++;
+    }
+
+    // terminate it
+    *host = '\0';
+
+    return 0;
 }
 
-int write_back(int client_socket_fd, char *response)
+size_t header_callback(char *buffer, size_t size, size_t nitems, void *userdata)
 {
-    printf("Writing[%s]\n", response);
-    send(client_socket_fd, response, strlen(response), 0);
+    strncpy(buffer, userdata, size *nitems);
+    return size *nitems;
 }
 
+static size_t WriteMemoryCallback(void *contents, size_t size, size_t nmemb, void *userp)
+{
+    size_t realsize = size * nmemb;
+    struct MemoryStruct *mem = (struct MemoryStruct *)userp;
+
+    mem->memory = realloc(mem->memory, mem->size + realsize + 1);
+    if(mem->memory == NULL) {
+    /* out of memory! */
+    printf("not enough memory (realloc returned NULL)\n");
+    return 0;
+    }
+
+    memcpy(&(mem->memory[mem->size]), contents, realsize);
+    mem->size += realsize;
+    mem->memory[mem->size] = 0;
+
+    return realsize;
+}
+
+int handle_request(char *post, char *host, int client_socket_fd)
+{
+    CURL *curl = NULL;
+    CURLcode res;
+    struct MemoryStruct chunk;
+
+    chunk.memory = malloc(1);  /* will be grown as needed by the realloc above */
+    chunk.size = 0;    /* no data at this point */
+
+    curl_global_init(CURL_GLOBAL_ALL);
+    curl = curl_easy_init();
+
+    // pass url
+    curl_easy_setopt(curl, CURLOPT_URL, host);
+    curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, header_callback);
+    curl_easy_setopt(curl, CURLOPT_HEADERDATA, post);
+
+    curl_easy_setopt(curl, CURLOPT_HEADER, 1);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&chunk);
+
+
+    res = curl_easy_perform(curl);
+
+    if (res != CURLE_OK)
+    {
+        printf("ERROR\n");
+    }
+    else
+    {
+        printf("%lu bytes retrieved\n", (long)chunk.size);
+
+        // write to client
+        send(client_socket_fd, chunk.memory, chunk.size, 0);
+    }
+
+
+
+
+
+    curl_easy_cleanup(curl);
+    if(chunk.memory)
+    {
+        free(chunk.memory);
+    }
+    curl_global_cleanup();
+
+    return 0;
+}
 
 int process_post(int client_socket_fd)
 {
     int sz;
     char post[MSG_SZ];
-    char response[MSG_SZ];
+    char host[MSG_SZ];
     int pid;
 
 
@@ -76,17 +164,17 @@ int process_post(int client_socket_fd)
         }
         else if (pid == 0)
         {
-            // if successfully fetched
-            fetch(post, response);
+            // get host from incoming http header
+            extract_host(post, host);
 
-            write_back(client_socket_fd, response);
+            handle_request(post, host, client_socket_fd);
 
             close(client_socket_fd);
             exit(0);
         }
         else
         {
-
+            continue;
         }
 
     }
@@ -171,6 +259,8 @@ int listen_port()
         {
             // parent proces close incoming connection
             close(client_socket_fd);
+
+            continue;
         }
     }
 
@@ -183,7 +273,7 @@ int main(int argc, char **argv)
     // test the number of arguments
     if (argc != 2)
     {
-        printf("Invalid number of arguments\n");
+        printf("Invalid number of arguments\n%s\n", usage);
         return -1;
     }
 
@@ -227,6 +317,11 @@ int main(int argc, char **argv)
     {
         // kill the listen process
         system("killall cproxy.out");
+    }
+
+    else
+    {
+        printf("Unidentified parameter\n%s\n", usage);
     }
 
     return 0;

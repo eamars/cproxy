@@ -4,6 +4,6 @@
 #include <stdio.h>
 
 #define CONFIG_FILENAME "proxy.cfg"
-#define MSG_SZ 4096
+#define MSG_SZ 40960
 
 #endif

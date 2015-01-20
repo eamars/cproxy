@@ -5,16 +5,16 @@
 # Define compilers and other flags
 CC = cc
 CFLAGS = -Os -Wall -Wextra -g -std=c99
-LIBS =
+LIBS = -lcurl
 DEL = rm
 
 all: cproxy.out
 
 proxy_main.o: proxy_main.c proxy.h config.h
-	$(CC) -c $(CFLAGS) $(LIBS) $< -o $@
+	$(CC) -c $(CFLAGS) $< -o $@
 
 config.o: config.c config.h
-	$(CC) -c $(CFLAGS) $(LIBS) $< -o $@
+	$(CC) -c $(CFLAGS) $< -o $@
 
 cproxy.out: proxy_main.o config.o
 	$(CC) $(CFLAGS) $(LIBS) $^ -o $@
